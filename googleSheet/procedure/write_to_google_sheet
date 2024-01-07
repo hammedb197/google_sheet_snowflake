@@ -1,0 +1,76 @@
+CREATE OR REPLACE PROCEDURE SAMPLE_DATA.TPCH_SF1.WRITE_TO_GSHEET(query string, 
+                                                        spreadsheet_id string, 
+                                                        range_name string)
+RETURNS STRING
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.8'
+PACKAGES = ('snowflake-snowpark-python','requests')
+HANDLER = 'write_to_gsheet'
+EXTERNAL_ACCESS_INTEGRATIONS = (GSHEET_API_ACCESS_INTEGRATION)
+SECRETS = ('credential'= GSHEET_SECRET)
+EXECUTE AS OWNER
+AS 
+$$
+import _snowflake
+import requests
+import json
+import pandas as pd
+
+import decimal
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, decimal.Decimal):
+            return str(o)
+        return super().default(o)
+        
+def get_columns(session, table_name):
+    table = table_name.split('.')[-1]
+    query_code = "SELECT COLUMN_NAME FROM sample_data.information_schema.columns WHERE table_name = '{}' order by ordinal_position".format(table)
+    column_name_df = session.sql(query_code).to_pandas()
+    column_name =  column_name_df.values.tolist()
+    
+    return [i[0] for i in column_name]
+
+def write_to_gsheet(session,table_name, spreadsheet_id, range_name):
+    # columns
+    columns = get_columns(session, table_name=table_name)
+
+    #query
+    query = "SELECT * FROM {0} ".format(table_name)
+    query_results = session.sql(query).collect()
+ 
+    results_df = pd.DataFrame(query_results, columns=columns)
+
+    # URL for the Google Sheets API
+    base_url = f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}'
+    access_token = _snowflake.get_oauth_access_token('credential')
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+     
+    data = {
+    "values": [
+        
+    ]
+}
+    data['values'] = [columns] + results_df.values.tolist()
+    # Define the data you want to write to the sheet
+    
+    # Prepare the request URL
+    url = f'{base_url}/values/{range_name}?valueInputOption=USER_ENTERED'
+    
+    # fix decimal type error in data (optional)
+    json_data = json.loads(json.dumps(data, cls=DecimalEncoder))
+    # Make a POST request to update the sheet
+    response = requests.put(url, headers=headers, json=json_data)
+    
+    if response.status_code == 200:
+        print('data written to Google Sheet successfully.')
+    else:
+        print(f'Error writing data to Google Sheet: {response.status_code} - {response.text}')
+    return response.text
+$$;
+
+CALL SAMPLE_DATA.TPCH_SF1.READ_SHEET('1nhESCkbzfd8b6-iYs3mTtxT8xdomNqHzxcFR_RhWCiQ', 'sheet1!A:Z', 'NEW_CUSTOMER', 'SAMPLE_DATA', 'TPCH_SF1');
